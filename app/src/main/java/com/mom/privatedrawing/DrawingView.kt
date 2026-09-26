@@ -52,6 +52,69 @@ class DrawingView @JvmOverloads constructor(
 
     private val clearXfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
 
+    // ---- Live tool cursor: a small icon that follows the touch point while drawing,
+    // so you can see exactly where the tip is (pen/pencil/marker/highlighter/brush get
+    // their own icon; shapes get a crosshair instead). ----
+    private var cursorX = 0f
+    private var cursorY = 0f
+    private var isCursorVisible = false
+    private val cursorIconCache = mutableMapOf<Tool, Bitmap>()
+    private val cursorPaint = Paint().apply {
+        isAntiAlias = true
+        colorFilter = android.graphics.PorterDuffColorFilter(Color.DKGRAY, PorterDuff.Mode.SRC_IN)
+        alpha = 200
+    }
+    private val crosshairPaint = Paint().apply {
+        isAntiAlias = true
+        color = Color.DKGRAY
+        alpha = 200
+        strokeWidth = 2f
+        style = Paint.Style.STROKE
+    }
+
+    private fun cursorIconResFor(tool: Tool): Int? = when (tool) {
+        Tool.PEN -> R.drawable.ic_tool_pen
+        Tool.PENCIL -> R.drawable.ic_tool_pencil
+        Tool.MARKER -> R.drawable.ic_tool_marker
+        Tool.HIGHLIGHTER -> R.drawable.ic_tool_highlighter
+        Tool.BRUSH -> R.drawable.ic_tool_brush
+        else -> null
+    }
+
+    private fun cursorIconFor(tool: Tool): Bitmap? {
+        val resId = cursorIconResFor(tool) ?: return null
+        return cursorIconCache.getOrPut(tool) {
+            val sizePx = (26 * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+            val drawable = androidx.core.content.ContextCompat.getDrawable(context, resId)!!.mutate()
+            val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            drawable.setBounds(0, 0, sizePx, sizePx)
+            drawable.draw(Canvas(bmp))
+            bmp
+        }
+    }
+
+    private fun updateCursor(x: Float, y: Float, visible: Boolean) {
+        cursorX = x
+        cursorY = y
+        isCursorVisible = visible
+        invalidate()
+    }
+
+    private fun drawCursorOverlay(canvas: Canvas) {
+        if (!isCursorVisible) return
+        val isShapeTool = currentTool in setOf(Tool.LINE, Tool.RECTANGLE, Tool.CIRCLE, Tool.TRIANGLE, Tool.STAR)
+        if (isShapeTool) {
+            val armLength = 16f * resources.displayMetrics.density
+            canvas.drawLine(cursorX - armLength, cursorY, cursorX + armLength, cursorY, crosshairPaint)
+            canvas.drawLine(cursorX, cursorY - armLength, cursorX, cursorY + armLength, crosshairPaint)
+            canvas.drawCircle(cursorX, cursorY, 3f * resources.displayMetrics.density, crosshairPaint)
+        } else {
+            val bitmap = cursorIconFor(currentTool) ?: return
+            // Anchor the icon's bottom-left tip at the touch point, like a pen resting on paper.
+            canvas.drawBitmap(bitmap, cursorX, cursorY - bitmap.height, cursorPaint)
+        }
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0 && h > 0) {
@@ -100,15 +163,16 @@ class DrawingView @JvmOverloads constructor(
             MotionEvent.ACTION_DOWN -> {
                 activePath = Path().apply { moveTo(x, y) }
                 configurePaintForTool()
+                updateCursor(x, y, visible = currentTool != Tool.ERASER)
             }
             MotionEvent.ACTION_MOVE -> {
                 activePath?.lineTo(x, y)
-                invalidate()
+                updateCursor(x, y, visible = currentTool != Tool.ERASER)
             }
             MotionEvent.ACTION_UP -> {
                 activePath?.lineTo(x, y)
                 commitFreehandStroke()
-                invalidate()
+                updateCursor(x, y, visible = false)
             }
         }
     }
@@ -134,7 +198,7 @@ class DrawingView @JvmOverloads constructor(
             }
             Tool.HIGHLIGHTER -> {
                 activePaint.color = currentColor
-                activePaint.alpha = 90
+                activePaint.alpha = 140
                 activePaint.strokeWidth = currentStrokeWidth * 2.4f
             }
             Tool.BRUSH -> {
@@ -200,15 +264,16 @@ class DrawingView @JvmOverloads constructor(
                 shapeStartX = x; shapeStartY = y
                 shapeCurX = x; shapeCurY = y
                 isShaping = true
-                invalidate()
+                updateCursor(x, y, visible = true)
             }
             MotionEvent.ACTION_MOVE -> {
                 shapeCurX = x; shapeCurY = y
-                invalidate()
+                updateCursor(x, y, visible = true)
             }
             MotionEvent.ACTION_UP -> {
                 shapeCurX = x; shapeCurY = y
                 isShaping = false
+                updateCursor(x, y, visible = false)
                 val bounds = RectF(
                     min(shapeStartX, shapeCurX), min(shapeStartY, shapeCurY),
                     max(shapeStartX, shapeCurX), max(shapeStartY, shapeCurY)
@@ -487,6 +552,8 @@ class DrawingView @JvmOverloads constructor(
                 drawShapeOn(canvas, previewAction)
             }
         }
+
+        drawCursorOverlay(canvas)
     }
 
     /** Returns a clean copy of just the drawing (no UI chrome) for Save/Share/Record. */
