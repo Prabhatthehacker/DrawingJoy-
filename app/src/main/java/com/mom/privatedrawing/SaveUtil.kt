@@ -60,6 +60,45 @@ object SaveUtil {
         return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     }
 
+    /**
+     * Copies a recorded MP4 (currently sitting in the app's private storage) into the
+     * public gallery, the same way savePngToGallery() does for images, so it actually
+     * shows up in the Gallery/Photos app under Movies > DrawingJoy. Returns the new
+     * public Uri, or null on failure.
+     */
+    fun saveVideoToGallery(context: Context, sourceFile: File): Uri? {
+        val filename = sourceFile.name
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val values = ContentValues().apply {
+                put(MediaStore.Video.Media.DISPLAY_NAME, filename)
+                put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/DrawingJoy")
+                put(MediaStore.Video.Media.IS_PENDING, 1)
+            }
+            val uri = context.contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            uri?.let {
+                context.contentResolver.openOutputStream(it)?.use { out: OutputStream ->
+                    sourceFile.inputStream().use { input -> input.copyTo(out) }
+                }
+                values.clear()
+                values.put(MediaStore.Video.Media.IS_PENDING, 0)
+                context.contentResolver.update(it, values, null, null)
+            }
+            uri
+        } else {
+            val dir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                "DrawingJoy"
+            )
+            if (!dir.exists()) dir.mkdirs()
+            val destFile = File(dir, filename)
+            sourceFile.inputStream().use { input ->
+                FileOutputStream(destFile).use { out -> input.copyTo(out) }
+            }
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", destFile)
+        }
+    }
+
     fun recordingsDir(context: Context): File {
         val dir = File(context.getExternalFilesDir(null), "Recordings")
         if (!dir.exists()) dir.mkdirs()
